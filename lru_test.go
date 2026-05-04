@@ -280,9 +280,9 @@ func TestConcurrentAccess(t *testing.T) {
 	lru := NewLRU[int, int](100)
 
 	done := make(chan bool)
-	for i := 0; i < 10; i++ {
+	for i := range 100 {
 		go func(id int) {
-			for j := 0; j < 100; j++ {
+			for j := range 100 {
 				lru.Set(id*100+j, id*100+j)
 				lru.Get(id * 100)
 			}
@@ -290,7 +290,7 @@ func TestConcurrentAccess(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 	// If we reach here without deadlock, concurrent access is safe
