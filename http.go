@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"log"
 	"net/http"
@@ -8,40 +9,62 @@ import (
 	"sync"
 )
 
+// ---------------------------------------------------------------------------
+// Body buffer pool — 复用 io.ReadAll 的缓冲区，减少分配
+// ---------------------------------------------------------------------------
+
+var bufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
+// ---------------------------------------------------------------------------
+// 预分配的错误响应体，避免每次 http.Error 做 string → []byte 转换
+// ---------------------------------------------------------------------------
+
 var (
-	mu     sync.RWMutex
-	stores = make(map[string]*Cache[string, []byte])
+	errBodyInvalidPath      = []byte("invalid path: expected /xxx/yyy/key\n")
+	errBodyNotFound         = []byte("not found\n")
+	errBodyReadBody         = []byte("read body error\n")
+	errBodyMethodNotAllowed = []byte("method not allowed\n")
 )
 
+func writeHTTPError(w http.ResponseWriter, code int, body []byte) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(code)
+	w.Write(body)
+}
+
+// ---------------------------------------------------------------------------
+// 路由缓存 — sync.Map 读路径无锁
+// ---------------------------------------------------------------------------
+
+var stores sync.Map
+
 func getOrCreateCache(path string) *Cache[string, []byte] {
-	// Fast path: read lock to check if cache already exists
-	mu.RLock()
-	if c, ok := stores[path]; ok {
-		mu.RUnlock()
-		return c
-	}
-	mu.RUnlock()
-
-	// Slow path: write lock to create a new cache
-	mu.Lock()
-	// Double-check: another goroutine may have created it between the unlock and lock
-	if c, ok := stores[path]; ok {
-		mu.Unlock()
-		return c
+	if v, ok := stores.Load(path); ok {
+		return v.(*Cache[string, []byte])
 	}
 
-	c := NewCache(128, GetFunc[string, []byte](func(_ string) ([]byte, bool) {
+	c := NewCache[string, []byte](128, GetFunc[string, []byte](func(_ string) ([]byte, bool) {
 		return nil, false
 	}))
-	stores[path] = &c
-	mu.Unlock()
+
+	actual, loaded := stores.LoadOrStore(path, &c)
+	if loaded {
+		return actual.(*Cache[string, []byte])
+	}
 	return &c
 }
+
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
 
 func handler(w http.ResponseWriter, r *http.Request) {
 	idx := strings.LastIndex(r.URL.Path, "/")
 	if idx < 0 || idx == len(r.URL.Path)-1 {
-		http.Error(w, "invalid path: expected /xxx/yyy/key", http.StatusBadRequest)
+		writeHTTPError(w, http.StatusBadRequest, errBodyInvalidPath)
 		return
 	}
 
@@ -54,22 +77,30 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		v, ok := c.Get(key)
 		if !ok {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeHTTPError(w, http.StatusNotFound, errBodyNotFound)
 			return
 		}
 		w.Write(v)
 
 	case http.MethodPost, http.MethodPut:
-		body, err := io.ReadAll(r.Body)
+		buf := bufPool.Get().(*bytes.Buffer)
+		buf.Reset()
+		_, err := io.Copy(buf, r.Body)
 		if err != nil {
-			http.Error(w, "read body error", http.StatusInternalServerError)
+			bufPool.Put(buf)
+			writeHTTPError(w, http.StatusInternalServerError, errBodyReadBody)
 			return
 		}
+		// 拷贝一份存入缓存，buffer 归还池中
+		body := make([]byte, buf.Len())
+		copy(body, buf.Bytes())
+		bufPool.Put(buf)
+
 		c.Set(key, body)
 		w.WriteHeader(http.StatusOK)
 
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeHTTPError(w, http.StatusMethodNotAllowed, errBodyMethodNotAllowed)
 	}
 }
 
