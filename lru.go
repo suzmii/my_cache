@@ -3,8 +3,32 @@ package main
 import (
 	"container/heap"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// cachedNow 用原子变量缓存当前时间，后台 goroutine 每 100ms 刷新一次。
+// 对缓存过期场景（秒级精度）完全够用，避免了 time.Now() 的系统调用开销。
+var cachedNow atomic.Int64
+
+func init() {
+	cachedNow.Store(time.Now().UnixNano())
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		for t := range ticker.C {
+			cachedNow.Store(t.UnixNano())
+		}
+	}()
+}
+
+func now() time.Time {
+	return time.Unix(0, cachedNow.Load())
+}
+
+// refreshNow 强制刷新缓存时间，仅用于测试。
+func refreshNow() {
+	cachedNow.Store(time.Now().UnixNano())
+}
 
 type entry[K comparable, V any] struct {
 	key      K
@@ -156,7 +180,7 @@ func (l *LRU[K, V]) Get(k K) (V, bool) {
 	defer l.lock.Unlock()
 
 	if v, ok := l.m[k]; ok {
-		if v.idx >= 0 && time.Now().After(v.deadline) {
+		if v.idx >= 0 && now().After(v.deadline) {
 			l.removeEntry(v)
 			return l.zero, false
 		}
@@ -176,7 +200,7 @@ func (l *LRU[K, V]) removeEntry(e *entry[K, V]) {
 
 // evictOne 驱逐一个元素：优先找已过期的，否则取 LRU 末尾。
 func (l *LRU[K, V]) evictOne() *entry[K, V] {
-	if len(l.h) > 0 && time.Now().After(l.h[0].deadline) {
+	if len(l.h) > 0 && now().After(l.h[0].deadline) {
 		e := l.h[0]
 		l.removeEntry(e)
 		return e
