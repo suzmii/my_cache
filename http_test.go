@@ -477,3 +477,26 @@ func BenchmarkHandlerGetDifferentPaths(b *testing.B) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Baseline benchmarks — 测量 httptest 本身的开销
+// ---------------------------------------------------------------------------
+
+func BenchmarkHttptestOverheadGet(b *testing.B) {
+	b.ResetTimer()
+	for b.Loop() {
+		_ = httptest.NewRequest(http.MethodGet, "/bench/key", nil)
+		w := httptest.NewRecorder()
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func BenchmarkHttptestOverheadPost(b *testing.B) {
+	body := "hello"
+	b.ResetTimer()
+	for b.Loop() {
+		_ = httptest.NewRequest(http.MethodPost, "/bench/key", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		w.WriteHeader(http.StatusOK)
+	}
+}
