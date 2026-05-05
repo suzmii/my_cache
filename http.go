@@ -9,22 +9,32 @@ import (
 )
 
 var (
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	stores = make(map[string]*Cache[string, []byte])
 )
 
 func getOrCreateCache(path string) *Cache[string, []byte] {
-	mu.Lock()
-	defer mu.Unlock()
-
+	// Fast path: read lock to check if cache already exists
+	mu.RLock()
 	if c, ok := stores[path]; ok {
+		mu.RUnlock()
+		return c
+	}
+	mu.RUnlock()
+
+	// Slow path: write lock to create a new cache
+	mu.Lock()
+	// Double-check: another goroutine may have created it between the unlock and lock
+	if c, ok := stores[path]; ok {
+		mu.Unlock()
 		return c
 	}
 
-	c := NewCache[string, []byte](128, GetFunc[string, []byte](func(_ string) ([]byte, bool) {
+	c := NewCache(128, GetFunc[string, []byte](func(_ string) ([]byte, bool) {
 		return nil, false
 	}))
 	stores[path] = &c
+	mu.Unlock()
 	return &c
 }
 
