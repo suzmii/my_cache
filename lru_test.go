@@ -295,3 +295,56 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 	// If we reach here without deadlock, concurrent access is safe
 }
+
+// ---------------------------------------------------------------------------
+// LRU Benchmarks — focus on heap overhead at scale
+// ---------------------------------------------------------------------------
+
+func benchmarkLRUSet(size int, b *testing.B) {
+	lru := NewLRU[int, int](size)
+	b.ResetTimer()
+	for b.Loop() {
+		lru.Set(b.N%size, b.N)
+	}
+}
+
+func benchmarkLRUSetWithTTL(size int, b *testing.B) {
+	lru := NewLRU[int, int](size)
+	deadline := time.Now().Add(time.Hour)
+	b.ResetTimer()
+	for b.Loop() {
+		lru.SetWithTTL(b.N%size, b.N, deadline)
+	}
+}
+
+func BenchmarkLRUSet_128(b *testing.B)  { benchmarkLRUSet(128, b) }
+func BenchmarkLRUSet_1K(b *testing.B)   { benchmarkLRUSet(1000, b) }
+func BenchmarkLRUSet_10K(b *testing.B)  { benchmarkLRUSet(10000, b) }
+func BenchmarkLRUSet_100K(b *testing.B) { benchmarkLRUSet(100000, b) }
+
+func BenchmarkLRUSetWithTTL_128(b *testing.B)  { benchmarkLRUSetWithTTL(128, b) }
+func BenchmarkLRUSetWithTTL_1K(b *testing.B)   { benchmarkLRUSetWithTTL(1000, b) }
+func BenchmarkLRUSetWithTTL_10K(b *testing.B)  { benchmarkLRUSetWithTTL(10000, b) }
+func BenchmarkLRUSetWithTTL_100K(b *testing.B) { benchmarkLRUSetWithTTL(100000, b) }
+
+func BenchmarkLRUGet_Hit(b *testing.B) {
+	lru := NewLRU[int, int](10000)
+	for i := range 5000 {
+		lru.Set(i, i)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		lru.Get(b.N % 5000)
+	}
+}
+
+func BenchmarkLRUGet_Miss(b *testing.B) {
+	lru := NewLRU[int, int](10000)
+	for i := range 5000 {
+		lru.Set(i, i)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		lru.Get(b.N + 10000)
+	}
+}
