@@ -12,7 +12,7 @@ type entry[K comparable, V any] struct {
 	prev     *entry[K, V]
 	next     *entry[K, V]
 	deadline time.Time
-	idx      int // 堆中的idx
+	idx      int // 堆中的索引，-1 表示不在堆中
 }
 
 type expireHeap[K comparable, V any] []*entry[K, V]
@@ -88,14 +88,31 @@ func (l *LRU[K, V]) linkedListMoveToFront(e *entry[K, V]) {
 	l.linkedListPushFront(e)
 }
 
+// Set 写入无 TTL 的 key。大多数场景走这个路径，完全不触碰过期堆。
 func (l *LRU[K, V]) Set(k K, v V) {
-	l.SetWithTTL(k, v, time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC))
+	l.lock.Lock()
+	defer l.lock.Unlock()
+
+	if e, ok := l.m[k]; ok {
+		l.removeEntry(e)
+	}
+
+	if len(l.m) >= l.size {
+		l.evict()
+	}
+
+	e := &entry[K, V]{
+		key:      k,
+		value:    v,
+		deadline: time.Time{},
+		idx:      -1,
+	}
+
+	l.linkedListPushFront(e)
+	l.m[k] = e
 }
 
-// SetWithTTL: 先查是否存在，如果存在直接更新数据和TTL
-// 如果不存在尝试插入:
-//
-//	如果还有空余
+// SetWithTTL 写入带过期时间的 key。
 func (l *LRU[K, V]) SetWithTTL(k K, v V, deadline time.Time) {
 	l.lock.Lock()
 	defer l.lock.Unlock()
@@ -112,6 +129,7 @@ func (l *LRU[K, V]) SetWithTTL(k K, v V, deadline time.Time) {
 		key:      k,
 		value:    v,
 		deadline: deadline,
+		idx:      -1,
 	}
 
 	l.linkedListPushFront(e)
@@ -124,7 +142,7 @@ func (l *LRU[K, V]) Get(k K) (V, bool) {
 	defer l.lock.Unlock()
 
 	if v, ok := l.m[k]; ok {
-		if time.Now().After(v.deadline) {
+		if v.idx >= 0 && time.Now().After(v.deadline) {
 			l.removeEntry(v)
 			return l.zero, false
 		}
@@ -136,7 +154,9 @@ func (l *LRU[K, V]) Get(k K) (V, bool) {
 
 func (l *LRU[K, V]) removeEntry(e *entry[K, V]) {
 	l.linkedListRemove(e)
-	heap.Remove(&l.h, e.idx)
+	if e.idx >= 0 {
+		heap.Remove(&l.h, e.idx)
+	}
 	delete(l.m, e.key)
 }
 
