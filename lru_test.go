@@ -135,6 +135,7 @@ func TestSetWithTTL_Expired(t *testing.T) {
 
 	// Wait for expiration
 	time.Sleep(20 * time.Millisecond)
+	refreshNow()
 
 	// Should be expired now
 	_, ok = lru.Get("a")
@@ -179,6 +180,7 @@ func TestExpiredEntryRemoved(t *testing.T) {
 	lru.Set("b", 2)
 
 	time.Sleep(20 * time.Millisecond)
+	refreshNow()
 
 	// Accessing 'a' should detect expiration and remove it
 	_, ok := lru.Get("a")
@@ -201,6 +203,7 @@ func TestEvictExpiredBeforeLRU(t *testing.T) {
 	lru.SetWithTTL(2, "two", time.Now().Add(10*time.Millisecond))
 
 	time.Sleep(20 * time.Millisecond)
+	refreshNow()
 
 	// Insert a new entry, eviction should first remove expired entries
 	lru.Set(3, "three")
@@ -303,8 +306,10 @@ func TestConcurrentAccess(t *testing.T) {
 func benchmarkLRUSet(size int, b *testing.B) {
 	lru := NewLRU[int, int](size)
 	b.ResetTimer()
+	i := 0
 	for b.Loop() {
-		lru.Set(b.N%size, b.N)
+		lru.Set(i%size, i)
+		i++
 	}
 }
 
@@ -312,8 +317,10 @@ func benchmarkLRUSetWithTTL(size int, b *testing.B) {
 	lru := NewLRU[int, int](size)
 	deadline := time.Now().Add(time.Hour)
 	b.ResetTimer()
+	i := 0
 	for b.Loop() {
-		lru.SetWithTTL(b.N%size, b.N, deadline)
+		lru.SetWithTTL(i%size, i, deadline)
+		i++
 	}
 }
 
@@ -327,14 +334,39 @@ func BenchmarkLRUSetWithTTL_1K(b *testing.B)   { benchmarkLRUSetWithTTL(1000, b)
 func BenchmarkLRUSetWithTTL_10K(b *testing.B)  { benchmarkLRUSetWithTTL(10000, b) }
 func BenchmarkLRUSetWithTTL_100K(b *testing.B) { benchmarkLRUSetWithTTL(100000, b) }
 
+// BenchmarkLRUSet_Evict 使用永不重复的 key，持续触发 eviction，测满缓存插入路径。
+func BenchmarkLRUSet_Evict(b *testing.B) {
+	lru := NewLRU[int, int](128)
+	b.ResetTimer()
+	i := 0
+	for b.Loop() {
+		lru.Set(i, i)
+		i++
+	}
+}
+
+// BenchmarkLRUSetWithTTL_Evict 同上，带 TTL。
+func BenchmarkLRUSetWithTTL_Evict(b *testing.B) {
+	lru := NewLRU[int, int](128)
+	deadline := time.Now().Add(time.Hour)
+	b.ResetTimer()
+	i := 0
+	for b.Loop() {
+		lru.SetWithTTL(i, i, deadline)
+		i++
+	}
+}
+
 func BenchmarkLRUGet_Hit(b *testing.B) {
 	lru := NewLRU[int, int](10000)
 	for i := range 5000 {
 		lru.Set(i, i)
 	}
 	b.ResetTimer()
+	i := 0
 	for b.Loop() {
-		lru.Get(b.N % 5000)
+		lru.Get(i % 5000)
+		i++
 	}
 }
 
@@ -344,7 +376,9 @@ func BenchmarkLRUGet_Miss(b *testing.B) {
 		lru.Set(i, i)
 	}
 	b.ResetTimer()
+	i := 0
 	for b.Loop() {
-		lru.Get(b.N + 10000)
+		lru.Get(i + 10000)
+		i++
 	}
 }
