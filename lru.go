@@ -94,20 +94,27 @@ func (l *LRU[K, V]) Set(k K, v V) {
 	defer l.lock.Unlock()
 
 	if e, ok := l.m[k]; ok {
-		l.removeEntry(e)
+		e.value = v
+		e.deadline = time.Time{}
+		l.linkedListMoveToFront(e)
+		if e.idx >= 0 {
+			heap.Remove(&l.h, e.idx)
+			e.idx = -1
+		}
+		return
 	}
 
+	var e *entry[K, V]
 	if len(l.m) >= l.size {
-		l.evict()
+		e = l.evictOne()
+	} else {
+		e = &entry[K, V]{}
 	}
 
-	e := &entry[K, V]{
-		key:      k,
-		value:    v,
-		deadline: time.Time{},
-		idx:      -1,
-	}
-
+	e.key = k
+	e.value = v
+	e.deadline = time.Time{}
+	e.idx = -1
 	l.linkedListPushFront(e)
 	l.m[k] = e
 }
@@ -118,20 +125,27 @@ func (l *LRU[K, V]) SetWithTTL(k K, v V, deadline time.Time) {
 	defer l.lock.Unlock()
 
 	if e, ok := l.m[k]; ok {
-		l.removeEntry(e)
+		e.value = v
+		e.deadline = deadline
+		l.linkedListMoveToFront(e)
+		if e.idx >= 0 {
+			heap.Fix(&l.h, e.idx)
+		} else {
+			heap.Push(&l.h, e)
+		}
+		return
 	}
 
+	var e *entry[K, V]
 	if len(l.m) >= l.size {
-		l.evict()
+		e = l.evictOne()
+	} else {
+		e = &entry[K, V]{}
 	}
 
-	e := &entry[K, V]{
-		key:      k,
-		value:    v,
-		deadline: deadline,
-		idx:      -1,
-	}
-
+	e.key = k
+	e.value = v
+	e.deadline = deadline
 	l.linkedListPushFront(e)
 	heap.Push(&l.h, e)
 	l.m[k] = e
@@ -160,26 +174,14 @@ func (l *LRU[K, V]) removeEntry(e *entry[K, V]) {
 	delete(l.m, e.key)
 }
 
-func (l *LRU[K, V]) evict() {
-	// 1. 已过期
-	// 2. 末尾
-	if l.tail.prev == l.head {
-		return
+// evictOne 驱逐一个元素：优先找已过期的，否则取 LRU 末尾。
+func (l *LRU[K, V]) evictOne() *entry[K, V] {
+	if len(l.h) > 0 && time.Now().After(l.h[0].deadline) {
+		e := l.h[0]
+		l.removeEntry(e)
+		return e
 	}
-
-	if l.evictDead() > 0 {
-		return
-	}
-
-	l.removeEntry(l.tail.prev)
-}
-
-// evictDead 去除已过期的元素, 返回去除的数量
-func (l *LRU[K, V]) evictDead() int {
-	cnt := 0
-	for len(l.h) > 0 && time.Now().After(l.h[0].deadline) {
-		l.removeEntry(l.h[0])
-		cnt += 1
-	}
-	return cnt
+	e := l.tail.prev
+	l.removeEntry(e)
+	return e
 }
